@@ -31,7 +31,10 @@ EVENT_ID_MAP = {
 # ===== IP → HOST MAP =====
 IP_NAME_MAP = {
     "10.230.134.90": "EWIN01",
+<<<<<<< HEAD
     "10.230.135.102": "EWIN02",
+=======
+>>>>>>> 61b5a107d97e91ccf8d17133e883f9648fa60c28
     # "10.x.x.x": "ELV801",
 }
 
@@ -447,4 +450,8 @@ while True:
         cpu_count = 0
         mem_count = 0
 
+<<<<<<< HEAD
     time.sleep(CHECK_INTERVAL)
+=======
+    time.sleep(CHECK_INTERVAL)
+>>>>>>> 61b5a107d97e91ccf8d17133e883f9648fa60c28
