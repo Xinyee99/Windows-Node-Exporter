@@ -446,9 +446,3 @@ while True:
         was_alerting = True
         cpu_count = 0
         mem_count = 0
-
-<<<<<<< HEAD
-    time.sleep(CHECK_INTERVAL)
-=======
-    time.sleep(CHECK_INTERVAL)
->>>>>>> 61b5a107d97e91ccf8d17133e883f9648fa60c28
