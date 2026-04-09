@@ -31,7 +31,7 @@ EVENT_ID_MAP = {
 # ===== IP → HOST MAP =====
 IP_NAME_MAP = {
     "10.230.134.90": "EWIN01",
-    "10.230.135.102": "EWIN02",
+    "10.230.134.155": "EWIN02",
     # "10.x.x.x": "ELV801",
 }
 
@@ -44,6 +44,7 @@ MEM_CRIT  = 90
 WEBHOOK        = "https://open.larksuite.com/open-apis/bot/v2/hook/6c52b964-fc29-4e46-bf7a-859a9e237471"
 CHECK_INTERVAL = 10
 ALERT_COOLDOWN = 60
+#ALERT_COOLDOWN = 600 //10 minutes
 
 # ===== INIT HOST =====
 def get_local_ip():
