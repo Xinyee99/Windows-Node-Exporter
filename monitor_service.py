@@ -43,7 +43,7 @@ MEM_CRIT  = 90
 
 WEBHOOK        = "https://open.larksuite.com/open-apis/bot/v2/hook/6c52b964-fc29-4e46-bf7a-859a9e237471"
 CHECK_INTERVAL = 10
-ALERT_COOLDOWN = 600
+ALERT_COOLDOWN = 60
 
 # ===== INIT HOST =====
 def get_local_ip():
