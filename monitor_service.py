@@ -5,14 +5,27 @@ import subprocess
 import socket
 import re
 import logging
+from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 
 # ===== LOGGING =====
-logging.basicConfig(
-    filename=r"C:\monitor-agent\monitor.log",
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s %(message)s',
+# RotatingFileHandler 而不是无限增长的 FileHandler：
+# 1) 避免 monitor.log 无限变大
+# 2) 一旦 Promtail 的 positions.yaml 又损坏需要重放，最坏情况也只重放 2MB x 3 份，
+#    不会再一次性炸出几十万行打到 Loki 撞限速(429)
+_log_handler = RotatingFileHandler(
+    r"C:\monitor-agent\monitor.log",
+    maxBytes=2 * 1024 * 1024,   # 每个文件 2MB
+    backupCount=3,              # 保留 3 份历史 (monitor.log.1 / .2 / .3)
+    encoding="utf-8"
+)
+_log_handler.setFormatter(logging.Formatter(
+    fmt='%(asctime)s %(levelname)s %(message)s',
     datefmt='%Y-%m-%dT%H:%M:%S'
+))
+logging.basicConfig(
+    handlers=[_log_handler],
+    level=logging.INFO
 )
 
 # ===== EVENT ID MAP =====
@@ -33,7 +46,8 @@ IP_NAME_MAP = {
     # "10.x.x.x": "ELV801",
     "10.230.134.90": "EWIN01",
     "10.230.134.155": "EWIN02",
-    "10.170.2.175": "SDHS01"
+    "10.170.2.175": "SDHS01",
+    "10.170.2.214": "FDT01"
 }
 
 # ===== CONFIG =====
@@ -46,6 +60,12 @@ WEBHOOK        = "https://open.larksuite.com/open-apis/bot/v2/hook/6c52b964-fc29
 CHECK_INTERVAL = 10
 ALERT_COOLDOWN = 60
 #ALERT_COOLDOWN = 600 //10 minutes
+
+# 每隔多少次循环才写一行到 monitor.log（Loki 用的就是这个文件）。
+# 主循环大约每 1 秒跑一次，LOG_EVERY_N_LOOPS=5 大约就是 5 秒写一行。
+# Grafana 那边本来就是用 avg_over_time(...[1m]/[2m]) 做平均，没必要每秒都写，
+# 降低写入频率能直接减少整个机队打进 Loki 的总流量，减少撞到共享限速(429)的机会。
+LOG_EVERY_N_LOOPS = 5
 
 # ===== INIT HOST =====
 def get_local_ip():
@@ -68,6 +88,7 @@ cpu_count       = 0
 mem_count       = 0
 last_alert_time = datetime.min
 was_alerting    = False  # 追踪是否曾经告警过
+loop_counter    = 0      # 用于控制写日志的频率（见 LOG_EVERY_N_LOOPS）
 
 # ===== HELPERS =====
 def get_level(cpu, mem):
@@ -409,42 +430,55 @@ def send_lark_alert(data, level):
 
 # ===== MAIN LOOP =====
 while True:
-    cpu = psutil.cpu_percent(interval=1)
-    mem = psutil.virtual_memory().percent
-    level = get_level(cpu, mem)
+    try:
+        cpu = psutil.cpu_percent(interval=1)
+        mem = psutil.virtual_memory().percent
+        level = get_level(cpu, mem)
 
-    logging.info(f"host={HOST} cpu={cpu:.1f} mem={mem:.1f} level={level or 'normal'}")
+        # 降频写日志：不是每次循环都写，减少 monitor.log 增长速度和
+        # Promtail/Loki 那边的摄入压力。cpu_count/mem_count 的告警判断
+        # 逻辑不受影响，照样每次循环都在跑。
+        loop_counter += 1
+        if loop_counter % LOG_EVERY_N_LOOPS == 0:
+            logging.info(f"host={HOST} cpu={cpu:.1f} mem={mem:.1f} level={level or 'normal'}")
 
-    if level:
-        cpu_count += 1
-        mem_count += 1
-    else:
-        # 如果之前在告警状态，现在恢复正常 → 发 RESOLVED
-        if was_alerting:
-            send_resolved(cpu, mem)
-            was_alerting = False
-        cpu_count = 0
-        mem_count = 0
+        if level:
+            cpu_count += 1
+            mem_count += 1
+        else:
+            # 如果之前在告警状态，现在恢复正常 → 发 RESOLVED
+            if was_alerting:
+                send_resolved(cpu, mem)
+                was_alerting = False
+            cpu_count = 0
+            mem_count = 0
 
-    if cpu_count >= 3 or mem_count >= 3:
-        event_lines = get_event_logs()
-        latest_error = None
-        if event_lines and "🟢" not in event_lines[0] and "⚠️" not in event_lines[0]:
-            latest_error = event_lines[0].strip().lstrip("• ")
+        if cpu_count >= 3 or mem_count >= 3:
+            event_lines = get_event_logs()
+            latest_error = None
+            if event_lines and "🟢" not in event_lines[0] and "⚠️" not in event_lines[0]:
+                latest_error = event_lines[0].strip().lstrip("• ")
 
-        data = {
-            "time":    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "cpu":     cpu,
-            "memory":  mem,
-            "cpu_bar": progress_bar(cpu, CPU_WARN, CPU_CRIT),
-            "mem_bar": progress_bar(mem, MEM_WARN, MEM_CRIT),
-            "sysinfo": get_system_info(latest_error),
-            "top":     get_top_process(),
-            "gpu":     get_gpu_usage(),
-            "event":   event_lines,
-            "edge":    get_edge_memory(),
-        }
-        send_lark_alert(data, level)
-        was_alerting = True
-        cpu_count = 0
-        mem_count = 0
+            data = {
+                "time":    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "cpu":     cpu,
+                "memory":  mem,
+                "cpu_bar": progress_bar(cpu, CPU_WARN, CPU_CRIT),
+                "mem_bar": progress_bar(mem, MEM_WARN, MEM_CRIT),
+                "sysinfo": get_system_info(latest_error),
+                "top":     get_top_process(),
+                "gpu":     get_gpu_usage(),
+                "event":   event_lines,
+                "edge":    get_edge_memory(),
+            }
+            send_lark_alert(data, level)
+            was_alerting = True
+            cpu_count = 0
+            mem_count = 0
+    except Exception as e:
+        # 任何单次循环里的异常都不应该把整个服务干掉——记下来，睡一下，继续跑。
+        try:
+            logging.error(f"host={HOST} main loop error: {e}")
+        except Exception:
+            pass
+        time.sleep(CHECK_INTERVAL)
